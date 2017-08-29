@@ -1,4 +1,4 @@
-// Space time 
+// Spatial model for seal data w/ perfect species ID
 #include <TMB.hpp>
 //#include <atomic_math.hpp>  //for D_lgamma
 
