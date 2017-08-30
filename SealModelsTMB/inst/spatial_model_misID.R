@@ -64,7 +64,9 @@ MisID_pars[2,] = c(-20,-0.5,0,2.5,1.5,1,-20,-0.5,0,1)
 MisID_pars[3,] = c(-20,-0.5,0,-20,-0.5,0,2.5,1.5,1,1)
 MisID_real = MisID_pars
 for(isp in 1:n_species)MisID_real[isp,] = exp(MisID_pars[isp,])/sum(exp(MisID_pars[isp,]))
-
+n_misID_par = n_species*n_obs_types
+MisID_Sigma = matrix(0.000001,n_misID_par,n_misID_par)
+diag(MisID_Sigma) = 0.004
 
 # Results
 Results = array(NA,dim=c(n_sim,n_species,6))
@@ -132,13 +134,13 @@ for(i in 1:n_sim){
     # Data
     spde <- (inla.spde2.matern(mesh, alpha=2)$param.inla)[c("M0","M1","M2")]
     #Data = list( "Options_vec"=Options_vec, "c_i"=c_i, "P_i"=Prop_sampled,"A_s"=rep(1,n_cells),"s_i"=s_i-1, "X_sj"=cbind(1,x_s), "y_s"=y_s, "X_sk"=cbind(1,x_s),"X_sb"=matrix(1,n_cells,1), "spde"=spde)
-    Data = list( "Options_vec"=Options_vec, "C_i"=C_i, "P_i"=Prop_sampled,"A_s"=rep(1,n_cells),"s_i"=s_i-1,"y_s"=y_s,"X_s"=matrix(1,n_cells,2), "spde"=spde,"thin_mu_logit"=thin_logit,"Sigma_logit_thin"=Sigma_logit_thin,"MisID_pars"=MisID_pars)
+    Data = list( "Options_vec"=Options_vec, "C_i"=C_i, "P_i"=Prop_sampled,"A_s"=rep(1,n_cells),"s_i"=s_i-1,"y_s"=y_s,"X_s"=matrix(1,n_cells,2), "spde"=spde,"thin_mu_logit"=thin_logit,"Sigma_logit_thin"=Sigma_logit_thin,"MisID_mu"=MisID_pars,"MisID_Sigma"=MisID_Sigma)
     Data$X_s[,2]=x_s  
     
     # Parameters
     Etainput_s = matrix(0,n_species,mesh$n)  #spatial random effects
        
-    Params = list("Beta"=matrix(0,n_species,ncol(Data$X_s)), "logtau_z"=rep(0,n_species), "logkappa_z"=rep(-.9,n_species), "Etainput_s"=Etainput_s,"thin_logit_i"=thin_logit)
+    Params = list("Beta"=matrix(0,n_species,ncol(Data$X_s)), "logtau_z"=rep(0,n_species), "logkappa_z"=rep(-.9,n_species), "Etainput_s"=Etainput_s,"thin_logit_i"=thin_logit,"MisID_pars"=MisID_pars)
     Params$Beta[,1]=beta0 + runif(n_species,-0.1,0.1) #set mean expected abundance close to truth for faster optimization
     if(ncol(Data$X_s)>1)Params$Beta[,2:ncol(Data$X_s)]=betax + runif(n_species,-0.1,0.1)
 
@@ -215,6 +217,11 @@ for(i in 1:n_sim){
       #plot( x=Ztrue_s, y=R_s)
       #plot( x=Report$Z_s, y=Report$R_s)
 }
+
+summary((Results[,1,3]-Results[,1,2])/Results[,1,2])
+summary((Results[,2,3]-Results[,2,2])/Results[,2,2])
+summary((Results[,3,3]-Results[,3,2])/Results[,3,2])
+
 # 
 # ####################
 # # Read results
