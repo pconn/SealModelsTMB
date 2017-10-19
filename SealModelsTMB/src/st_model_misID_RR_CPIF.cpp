@@ -122,7 +122,8 @@ Type objective_function<Type>::operator() ()
   DATA_MATRIX( Dist_kk );
   
   // Parameters 
-  PARAMETER_MATRIX(Beta);              // fixed effects on density
+  PARAMETER_VECTOR(log_N);       //log total abundance for each species
+  PARAMETER_MATRIX(Beta);              // fixed effects on relative density
   PARAMETER_VECTOR(logvar_eta);      //species specific RE precision
   PARAMETER_VECTOR(logrange);
   PARAMETER_VECTOR(logsmooth);
@@ -149,6 +150,8 @@ Type objective_function<Type>::operator() ()
   MVNORM_t<Type>neg_log_density_thin(Sigma_logit_thin);
   MVNORM_t<Type>neg_log_density_misID(MisID_Sigma);
   vector<Type> jnll_comp(3);
+  vector<Type> N(n_sp);
+  for(int isp=0;isp<n_sp;isp++)N(isp)=exp(log_N(isp));
   jnll_comp.setZero();
 
   //set up thinning matrix
@@ -186,12 +189,14 @@ Type objective_function<Type>::operator() ()
   matrix<Type> A(n_s,n_eta);
   vector<Type> Cur_eta(n_eta);
   matrix<Type> Z_s(n_sp,n_st);
+  matrix<Type> Pi_s(n_sp,n_st);
   matrix<Type> E_count_sp(n_sp,n_i);
   matrix<Type> E_count_obs(n_i,n_obs_types);
   matrix<Type> RE(n_sp,n_st);
   vector<Type> linpredZ_s(n_st);
   vector<Type> Beta_tmp(n_b);
   vector<Type> phi(n_sp);
+  Type cur_sum;
   for(int isp=0;isp<n_sp;isp++){
     phi(isp)=plogis(phi_logit(isp));
     //Random effect priors
@@ -242,7 +247,17 @@ Type objective_function<Type>::operator() ()
       }
     }
     for(int ist=0; ist<n_st; ist++){
-      Z_s(isp,ist) = exp( linpredZ_s(ist) + RE(isp,ist) );
+      Pi_s(isp,ist) = exp( linpredZ_s(ist) + RE(isp,ist) );
+    }
+    for(int it=0;it<n_t;it++){
+      cur_sum = 0;
+      for(int is=0;is<n_s;is++){
+        cur_sum = cur_sum + Pi_s(isp,it*n_s+is);
+      }
+      for(int is=0;is<n_s;is++){
+        Pi_s(isp,it*n_s+is)=Pi_s(isp,it*n_s+is)/cur_sum;
+        Z_s(isp,it*n_s+is)=N(isp)*Pi_s(isp,it*n_s+is);
+      }
     }
   }
 
@@ -265,19 +280,12 @@ Type objective_function<Type>::operator() ()
   jnll_comp(2) = neg_log_density_thin(thin_logit_i-thin_mu_logit);
   jnll_comp(2) += neg_log_density_misID(MisID_pars-MisID_mu);
 
-  matrix<Type> total_abundance(n_sp,n_t);
-  for(int isp=0;isp<n_sp;isp++){
-    for(int it=0;it<n_t;it++){
-      total_abundance(isp,it)=Z_s.block(isp,it*n_s,1,n_s).sum();
-    }
-  }
-
   // Total objective
   Type jnll = jnll_comp.sum();
 
   //Reporting
+   REPORT( N );
    REPORT( Z_s );
-   REPORT( total_abundance );
    REPORT( logvar_eta );
    REPORT( logvar_delta );
    REPORT( logrange );
@@ -290,7 +298,7 @@ Type objective_function<Type>::operator() ()
    REPORT( jnll );
 
   // Bias correction output
-  ADREPORT( total_abundance);
+  ADREPORT( N);
   if(Options_vec(0)==1){
     ADREPORT( Beta );
     ADREPORT(Z_s);

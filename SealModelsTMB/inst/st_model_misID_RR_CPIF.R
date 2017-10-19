@@ -20,7 +20,7 @@ library( fields)
 
 # Compile
 setwd("C:/Users/paul.conn/git/SealModelsTMB/")
-TmbFile = "C:/Users/paul.conn/git/SealModelsTMB/SealModelsTMB/src/st_model_misID_RR"
+TmbFile = "C:/Users/paul.conn/git/SealModelsTMB/SealModelsTMB/src/st_model_misID_RR_CPIF"
 #dyn.unload( dynlib(TmbFile) )  #unload file if previously loaded to get proper write permission
 compile(paste0(TmbFile,".cpp"),"-O1 -g",DLLFLAGS="") 
 
@@ -34,7 +34,7 @@ source('c:/users/paul.conn/git/OkhotskST/OkhotskSeal/R/util_funcs.R')
 grid_dim = c("x"=25, "y"=25)
 n_samp_t = 40  #number of samples at each time step
 n_cells = grid_dim[1]*grid_dim[2]
-n_knots = 25  #assume square grid starting at 0,0 and ending at max(grid_dim$x)+1,max(grid_dim$y)+1
+n_knots = 9  #assume square grid starting at 0,0 and ending at max(grid_dim$x)+1,max(grid_dim$y)+1
 prop_sampled=0.25
 SpatialScale = sqrt(prod(grid_dim))/5  #for covariate generation
 matern_range = max(3,sqrt(n_knots)/2)
@@ -42,7 +42,6 @@ matern_smoothness = 2 #recall value of 0.5 is exponential; infty in Gaussian
 SD_eta = SD_x = 1
 SD_delta = 0.2  #innovation SD
 phi = 0.98 # AR process on random effects
-beta0 = 2
 Use_REML = FALSE   
 RandomSeed = 123456
 n_sim = 10
@@ -107,10 +106,11 @@ Results_par = array(NA,dim=c(n_sim,n_species,5))  #logvar_eta, logrange, logsmoo
 # Loop through replicates
 counter=1
 i=1
-for(i in 3:n_sim){
+#for(i in 1:n_sim){
     cat(paste("Simulation ",i,"\n"))
     set.seed( RandomSeed + i )
 
+    N = round(runif(n_species,4000,20000))
     betax = betax_prob = runif(n_species,-.5,.5)       # Impact of covariate (x) on density
 
     # Spatial model
@@ -136,20 +136,22 @@ for(i in 3:n_sim){
     }
 
 
-    X_s = matrix(1,n_cells*t_steps,2)
-    X_s[,2]=x_s
+    X_s = matrix(1,n_cells*t_steps,1)
+    X_s[,1]=x_s
       
     # Total abundance
-    Ztrue_st = array(0,dim=c(n_species,n_cells,t_steps))
+    Ztrue_st = N_st = array(0,dim=c(n_species,n_cells,t_steps))
     total_abundance = matrix(0,n_species,t_steps)
     for(isp in 1:n_species){
       for(it in 1:t_steps){
-        Ztrue_st[isp,,it]=exp( beta0 + betax[isp]*x_s + Eta_s[isp,,it] )
-        total_abundance[isp,it]=sum(Ztrue_st[isp,,it])
+        Ztrue_st[isp,,it]=exp( betax[isp]*x_s + Eta_s[isp,,it] )
+        Ztrue_st[isp,,it]=Ztrue_st[isp,,it]/sum(Ztrue_st[isp,,it])
+        N_st[isp,,it]=rmultinom(1,N[isp],Ztrue_st[isp,,it])
+        total_abundance[isp,it]=sum(N_st[isp,,it])
       }
     }
-    Ztrue_s = matrix(0,n_cells*t_steps,n_species)
-    for(isp in 1:n_species)Ztrue_s[,isp]=as.numeric(Ztrue_st[isp,,])
+    N_s = matrix(0,n_cells*t_steps,n_species)
+    for(isp in 1:n_species)N_s[,isp]=as.numeric(N_st[isp,,])
  
     #plot_N_map_xy(N=Ztrue_st[1,,1],XY=loc_s,leg.title="Abundance")
     
@@ -166,13 +168,12 @@ for(i in 3:n_sim){
     }
     S_i = (Mapping_i[,2]-1)*n_cells+Mapping_i[,1]
 
-    # Counting process - poisson model for counts, 
+    # Counting process - binomial model for counts, 
     C_i_true = matrix(0,n_samp,n_species)  #
     C_i = matrix(0,n_samp,n_obs_types)  #one entry per sample
     for(isp in 1:n_species){
-      Cur_lambda = Ztrue_s[S_i,isp]*prop_sampled*Thin[(isp-1)*n_samp+c(1:n_samp)]
-      C_i_true[,isp] = rpois(n=n_samp,lambda=Cur_lambda)
       for(isamp in 1:n_samp){
+        C_i_true[isamp,isp] = rbinom(1,N_s[S_i[isamp],isp],prop_sampled*Thin[(isp-1)*n_samp+isamp])
         if(C_i_true[isamp,isp]>0)C_i[isamp,]=C_i[isamp,]+rmultinom(1,C_i_true[isamp,isp],MisID_real[isp,])
       }
     }
@@ -193,11 +194,9 @@ for(i in 3:n_sim){
     Etainput_st[,1:n_knots,1]=Eta_k[,,1]
     Etainput_st[,1:n_knots,2:t_steps]=Delta_k[,,2:t_steps]
     Beta_init = matrix(0,n_species,ncol(Data$X_s))
-    Beta_init[,1] = log(colSums(Ztrue_s[1:n_cells,])/n_cells-0.5*sqrt(apply(Ztrue_s[1:n_cells,],2,'var')))
-    Beta_init[,2] = betax
-    Params = list("Beta"=Beta_init, "logvar_eta"=rep(0,n_species), "logrange"=rep(0,n_species),"logsmooth"=rep(0,n_species),"logvar_delta"=rep(-1,n_species),"Etainput_st"=Etainput_st,"thin_logit_i"=thin_logit,"MisID_pars"=MisID_pars,"phi_logit"=rep(4.0,n_species))
-    Params$Beta[,1]=beta0 + runif(n_species,-0.1,0.1) #set mean expected abundance close to truth for faster optimization
-    if(ncol(Data$X_s)>1)Params$Beta[,2:ncol(Data$X_s)]=betax + runif(n_species,-0.1,0.1)
+    Beta_init[,1] = betax
+    Params = list("log_N"=log(N*exp(rnorm(n_species,0,0.1))),"Beta"=Beta_init, "logvar_eta"=rep(0,n_species), "logrange"=rep(0,n_species),"logsmooth"=rep(0,n_species),"logvar_delta"=rep(-1,n_species),"Etainput_st"=Etainput_st,"thin_logit_i"=thin_logit,"MisID_pars"=MisID_pars,"phi_logit"=rep(4.0,n_species))
+    Params$Beta=Params$Beta+ runif(n_species*ncol(Data$X_s),-0.1,0.1)
 
     # Random
     Random = c( "Etainput_st" )
@@ -223,7 +222,9 @@ for(i in 3:n_sim){
     Obj = MakeADFun( data=Data, parameters=Params, random=Random, map=Map, silent=FALSE)
     Obj$fn( Obj$par )
     cat(Sys.time() - start.time)
-
+    
+    image(Obj$env$spHess(random=TRUE))
+    
     # Run
     #Lower = -Inf
     #Upper = Inf
@@ -251,16 +252,12 @@ for(i in 3:n_sim){
 #     #  Opt[["diagnostics"]] = data.frame( "Param"=names(Obj$par), "Lower"=-Inf, "Est"=Opt$par, "Upper"=Inf, "gradient"=Obj$gr(Opt$par) )
 #     #}
 #     
-     plot_N_map_xy(N=Ztrue_st[2,,1],XY=loc_s,leg.title="Abundance")
-     plot_N_map_xy(N=Report$Z_s[2,1:n_cells],XY=loc_s,leg.title="Abundance")
-     Report$total_abundance
-     N_true = matrix(0,n_species,t_steps)
-     for(isp in 1:n_species){
-       for(it in 1:t_steps){
-         N_true[isp,it] = sum(Ztrue_st[isp,,it])
-       }
-     }
-     N_true
+     isp=3
+     it=8
+     plot_N_map_xy(N=N_st[isp,,it],XY=loc_s,leg.title="Abundance")
+     plot_N_map_xy(N=Report$Z_s[isp,(it-1)*n_cells+c(1:n_cells)],XY=loc_s,leg.title="Abundance")
+     Report$N
+     N
      
 
     Converge=Opt$convergence
