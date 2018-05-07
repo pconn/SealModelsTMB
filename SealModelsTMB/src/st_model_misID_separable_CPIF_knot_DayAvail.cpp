@@ -87,6 +87,11 @@ Type plogis(Type x){
   return 1.0 / (1.0 + exp(-x));
 }
 
+template <class Type>
+Type f(Type x){
+  return Type(2)/(Type(1) + exp(-Type(1) * x)) - Type(1);
+}
+
 template<class Type>
 Type dbern(Type x, Type prob, int give_log=1){
   Type logres;
@@ -114,26 +119,32 @@ Type objective_function<Type>::operator() ()
   DATA_IVECTOR( S_i ); // Site-time index for each sample
   DATA_IMATRIX( Y_s); //indicator for which sites sampled/not sampled
   DATA_MATRIX( X_s );  //design matrix for fixed effects
+
+  DATA_STRUCT(spde, spde_t);
+  
   DATA_VECTOR(thin_mu_logit);
   DATA_SPARSE_MATRIX(Sigma_logit_thin); 
+  DATA_MATRIX(X_day);  // design matrix for extra day and day^2 effects
   DATA_ARRAY(MisID_mu);
   DATA_MATRIX(MisID_Sigma);  //variance covariance matrix for MisID_pars on mlogit scale
-  DATA_MATRIX( Dist_sk );
-  DATA_MATRIX( Dist_kk );
-  DATA_SCALAR(penalty);
   
+  
+  DATA_MATRIX(Kmap);
+  //DATA_ARRAY(Etainput_st);
+    
   // Parameters 
+  PARAMETER_VECTOR(log_N);       //log total abundance for each species
   PARAMETER_MATRIX(Beta);              // fixed effects on density
-  PARAMETER_VECTOR(logvar_eta);      //species specific RE precision
-  PARAMETER_VECTOR(logrange);
-  PARAMETER_VECTOR(logsmooth);
-  PARAMETER_VECTOR(logvar_delta);      //species specific RE precision
+  PARAMETER_VECTOR(logtau_eta);      //species specific spatial precision
+  PARAMETER_VECTOR(logkappa_eta);
+  PARAMETER_VECTOR(logit_rho);      //species specific AR1 correlation (logit scale)
   
   // Random effects
   PARAMETER_ARRAY( Etainput_st );           // Spatial variation in abundance
   PARAMETER_VECTOR( thin_logit_i );         // thinning "parameter" for each surveyed location (assumed MVN on logit scale)
+  PARAMETER_VECTOR( thin_beta_day );     //extra day and day^2 effects
+  
   PARAMETER_ARRAY(MisID_pars);   //confusion matrix estimates (mlogit scale)
-  PARAMETER_VECTOR(phi_logit);
   
   // derived sizes
   int n_i = C_i.col(0).size();
@@ -142,25 +153,40 @@ Type objective_function<Type>::operator() ()
   int n_t = Y_s.row(0).size();
   int n_st = X_s.col(0).size();
   int n_b = X_s.row(0).size();
-  int n_sp = logvar_eta.size(); //no. of species
+  int n_sp = logkappa_eta.size(); //no. of species
   int n_eta = Etainput_st.dim(1);
-  int j;
 
   // global stuff
-  MVNORM_t<Type>neg_log_density_thin(Sigma_logit_thin);
+  vector<Type> N(n_sp);
+  for(int isp=0;isp<n_sp;isp++)N(isp)=exp(log_N(isp));
   MVNORM_t<Type>neg_log_density_misID(MisID_Sigma);
-  vector<Type> jnll_comp(4);
+  MVNORM_t<Type>neg_log_density_thin(Sigma_logit_thin);
+  vector<Type> jnll_comp(3);
   jnll_comp.setZero();
+  vector<Type> MargSD_eta(n_sp);
+  vector<Type> Range_eta(n_sp);
+  vector<Type> Rho(n_sp);
+  Type cur_sum;
+  
+  for( int isp=0; isp<n_sp; isp++){
+    MargSD_eta(isp) = 1 / sqrt(4.0*M_PI) / exp(logtau_eta(isp)) / exp(logkappa_eta(isp));
+    Range_eta(isp) = sqrt(8.0) / exp( logkappa_eta(isp) );
+    Rho(isp) = f(logit_rho(isp));  
+  }
+  
 
+  
   //set up thinning matrix
   matrix<Type> Thin_i(n_sp,n_i);
   matrix<Type> Thin_trans(n_sp,n_i);
+  vector<Type> Day_effect(n_i);
+  Day_effect = X_day * thin_beta_day;
 
   for( int i=0;i<n_i;i++){
     for(int isp=0;isp<n_sp;isp++){
-      Thin_trans(isp,i)=1/(1+exp(-thin_logit_i(n_i*isp+i)));
+      Thin_trans(isp,i)=1/(1+exp(-thin_logit_i(n_i*isp+i)-Day_effect(n_i*isp+i)));
       Thin_i(isp,i)=P_i(i)*A_s(S_i(i))*Thin_trans(isp,i);
-     }
+    }
   }
 
   // Transform confusion matrix
@@ -177,73 +203,63 @@ Type objective_function<Type>::operator() ()
   }
   //std::cout<<Psi<<'\n';
 
-  //Random effect priors and predicted seal densities; loop over species
-  matrix<Type> Eta_st( n_eta,n_t);
-  matrix<Type> Eta_pred(n_s,n_t);
-  matrix<Type> Cor(n_eta,n_eta);
-  matrix<Type> Sigma(n_eta,n_eta);
-  matrix<Type> Cor_inv(n_eta,n_eta);
-  matrix<Type> Cross_cor(n_s,n_eta);
-  matrix<Type> A(n_s,n_eta);
-  vector<Type> Cur_eta(n_eta);
+  
+  //random effects priors
+  SparseMatrix<Type> Q;
+  array<Type> Cur_eta(n_eta,n_t);
+  GMRF_t<Type> gmrf_Q;
+  for(int isp=0;isp<n_sp;isp++){
+     Q = Q_spde_generalized(spde, exp(logkappa_eta(isp)), 2);  //default smoothing is alpha = 2
+     gmrf_Q = GMRF(Q);
+     for(int ieta=0;ieta<n_eta;ieta++){
+       for(int it=0;it<n_t;it++){
+         Cur_eta(ieta,it)=Etainput_st(isp,ieta,it);
+       }
+     }
+     jnll_comp(1) += SEPARABLE(AR1(Rho(isp)),gmrf_Q)(Cur_eta);
+   }
+
+  // Transform random effects
+  array<Type> Eta_st( n_sp,n_eta,n_t);
+  for(int isp=0;isp<n_sp;isp++){
+    for(int ieta=0;ieta<n_eta;ieta++){
+      for(int it=0;it<n_t;it++){
+        Eta_st(isp,ieta,it) = Etainput_st(isp,ieta,it) / exp(logtau_eta(isp));
+      }
+    }
+  }
+
+  // Predicted densities
+  matrix<Type> Pi_s(n_sp,n_st);
   matrix<Type> Z_s(n_sp,n_st);
   matrix<Type> E_count_sp(n_sp,n_i);
   matrix<Type> E_count_obs(n_i,n_obs_types);
   matrix<Type> RE(n_sp,n_st);
   vector<Type> linpredZ_s(n_st);
   vector<Type> Beta_tmp(n_b);
-  vector<Type> phi(n_sp);
   for(int isp=0;isp<n_sp;isp++){
-    phi(isp)=plogis(phi_logit(isp));
-    //Random effect priors
-    Type kappa = exp(logsmooth(isp))+0.5;
-    Type range = exp(logrange(isp))+2.0;
-    for(int i=0;i<n_eta;i++){
-      for(j=0;j<n_eta;j++){
-        Cor(i,j)=matern(Dist_kk(i,j),range,kappa);
-      }
-      for(int is=0;is<n_s;is++){
-        Cross_cor(is,i)=matern(Dist_sk(is,i),range,kappa);
-      }
-    }
-    Sigma=exp(logvar_eta(isp))*Cor;
-    for(int ieta=0;ieta<n_eta;ieta++){
-      Cur_eta(ieta)=Etainput_st(isp,ieta,0);
-    }
-    jnll_comp(1) += density::MVNORM_t<Type>(Sigma)(Cur_eta);
-    Sigma=exp(logvar_delta(isp))*Cor;
-    MVNORM_t<Type>neg_log_density_delta(Sigma);    
-    for(int it=1;it<n_t;it++){
-      for(int ieta=0;ieta<n_eta;ieta++){
-        Cur_eta(ieta)=Etainput_st(isp,ieta,it);
-      }
-       jnll_comp(1) += neg_log_density_delta(Cur_eta);
-    }
-
-    // Predictive process
-    for(int ieta=0;ieta<n_eta;ieta++){
-      Eta_st(ieta,0) = Etainput_st(isp,ieta,0);
-      for(int it=1;it<n_t;it++){
-        Eta_st(ieta,it) = Etainput_st(isp,ieta,it);
-      }
-    }
-    Cor_inv = atomic::matinv(Cor);
-    A = Cross_cor * Cor_inv;
-    Eta_pred = A * Eta_st;
-
-    //Predicted seal densities
     Beta_tmp = Beta.row(isp);
     linpredZ_s = X_s * Beta_tmp;
-    for(int is=0; is<n_s;is++){
-      RE(isp,is)=Eta_pred(is,0);
-    }
-    for(int it=1;it<n_t;it++){
+    for(int it=0;it<n_t;it++){
       for(int is=0;is<n_s;is++){
-        RE(isp,it*n_s+is)=phi(isp)*RE(isp,(it-1)*n_s+is)+Eta_pred(is,it);
+        RE(isp,it*n_s+is)=0.0;
+        for(int ieta=0;ieta<n_eta;ieta++){
+          RE(isp,it*n_s+is)+=Kmap(is,ieta)*Eta_st(isp,ieta,it);
+        }
       }
     }
     for(int ist=0; ist<n_st; ist++){
-      Z_s(isp,ist) = exp( linpredZ_s(ist) + RE(isp,ist) );
+      Pi_s(isp,ist) = exp( linpredZ_s(ist) + RE(isp,ist) );
+    }
+    for(int it=0;it<n_t;it++){
+      cur_sum = 0;
+      for(int is=0;is<n_s;is++){
+        cur_sum = cur_sum + Pi_s(isp,it*n_s+is);
+      }
+      for(int is=0;is<n_s;is++){
+        Pi_s(isp,it*n_s+is)=Pi_s(isp,it*n_s+is)/cur_sum;
+        Z_s(isp,it*n_s+is)=N(isp)*Pi_s(isp,it*n_s+is);
+      }
     }
   }
 
@@ -263,7 +279,9 @@ Type objective_function<Type>::operator() ()
   }
 
   // Probability of thinning and misID parameters (MVN prior/penalty)
-  jnll_comp(2) = neg_log_density_thin(thin_logit_i-thin_mu_logit);
+  jnll_comp(2) = neg_log_density_thin(thin_logit_i-thin_mu_logit-Day_effect);
+  for(int ispeff = 0; ispeff<(n_sp*2);ispeff++) jnll_comp(2) += pow(thin_beta_day(ispeff),2.0);  //ridge reg
+  std::cout<<"thin dens "<<jnll_comp(2)<<'\n';
   jnll_comp(2) += neg_log_density_misID(MisID_pars-MisID_mu);
 
   matrix<Type> total_abundance(n_sp,n_t);
@@ -272,36 +290,28 @@ Type objective_function<Type>::operator() ()
       total_abundance(isp,it)=Z_s.block(isp,it*n_s,1,n_s).sum();
     }
   }
-  
-  //penalty on abundance
-  vector<Type> mean_abundance(n_sp);
-  for(int isp=0;isp<n_sp;isp++){
-    mean_abundance(isp)=(total_abundance.row(isp)).sum();
-    mean_abundance(isp)=mean_abundance(isp)/n_t;
-    for(int it=0;it<n_t;it++){
-      jnll_comp(3) += penalty*pow((total_abundance(isp,it)-mean_abundance(isp)),2.0);
-    }
-  }
 
   // Total objective
   Type jnll = jnll_comp.sum();
 
+  //std::cout<<"Range "<<Range_eta<<"\n";
   //Reporting
+   REPORT( N );
    REPORT( Z_s );
    REPORT( total_abundance );
-   REPORT( logvar_eta );
-   REPORT( logvar_delta );
-   REPORT( logrange );
-   REPORT( logsmooth );
+   REPORT( Range_eta );
+   REPORT( MargSD_eta );
+   REPORT( Rho );
    REPORT( Beta );
-   REPORT( phi )
-   //REPORT( Etainput_st );
+   REPORT( Eta_st );
    REPORT( Psi);
+   REPORT( thin_beta_day);
+   REPORT( Thin_trans);
    REPORT( jnll_comp );
    REPORT( jnll );
 
   // Bias correction output
-  ADREPORT( total_abundance);
+  ADREPORT( N);
   if(Options_vec(0)==1){
     ADREPORT( Beta );
     ADREPORT(Z_s);

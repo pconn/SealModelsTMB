@@ -30,8 +30,8 @@ source('c:/users/paul.conn/git/OkhotskST/OkhotskSeal/R/util_funcs.R')
 #source('./OkhotskSeal/R/sim_data_generic.R')
 
 # Settings
-grid_dim = c("x"=25, "y"=25)
-n_samp_t = 20  #number of samples at each time step
+grid_dim = c("x"=10, "y"=10)
+n_samp_t = 50  #number of samples at each time step
 n_cells = grid_dim[1]*grid_dim[2]
 prop_sampled=0.2
 SpatialScale = sqrt(prod(grid_dim))/5  # Range ~ 2*Scale
@@ -50,6 +50,7 @@ n_obs_types = 3*n_species+1 #3 certainty levels for each species + an 'unknown' 
 t_steps = 10
 n_samp = t_steps*n_samp_t  #total number of samples
 Prop_sampled=rep(prop_sampled,n_samp)
+penalty=0.1
 
 #misID_fix = c(10,10,10)  #which column of confusion matrix to fix to 1.0 on the multinomial logit scale for each species
 
