@@ -125,9 +125,11 @@ Type objective_function<Type>::operator() ()
   DATA_VECTOR(thin_mu_logit);
   DATA_SPARSE_MATRIX(Sigma_logit_thin); 
   DATA_MATRIX(X_day);  // design matrix for extra day and day^2 effects
-  DATA_ARRAY(MisID_mu);
+  DATA_VECTOR(MisID_mu);
   DATA_MATRIX(MisID_Sigma);  //variance covariance matrix for MisID_pars on mlogit scale
-  
+  DATA_IVECTOR(MisID_pos_rows);   //row indices for positive entries of MisID matrix
+  DATA_IVECTOR(MisID_pos_cols);   //ibid, columns
+  DATA_IVECTOR(MisID_zero_cols);  // which columns of confusion matrix to set to set to zero on multinomial logit scale (by species)
   
   DATA_MATRIX(Kmap);
   //DATA_ARRAY(Etainput_st);
@@ -144,7 +146,7 @@ Type objective_function<Type>::operator() ()
   PARAMETER_VECTOR( thin_logit_i );         // thinning "parameter" for each surveyed location (assumed MVN on logit scale)
   PARAMETER_VECTOR( thin_beta_day );     //extra day and day^2 effects
   
-  PARAMETER_ARRAY(MisID_pars);   //confusion matrix estimates (mlogit scale)
+  PARAMETER_VECTOR(MisID_pars);   //confusion matrix estimates (mlogit scale)
   
   // derived sizes
   int n_i = C_i.col(0).size();
@@ -155,6 +157,7 @@ Type objective_function<Type>::operator() ()
   int n_b = X_s.row(0).size();
   int n_sp = logkappa_eta.size(); //no. of species
   int n_eta = Etainput_st.dim(1);
+  int n_misID_par = MisID_pars.size();
 
   // global stuff
   vector<Type> N(n_sp);
@@ -191,14 +194,19 @@ Type objective_function<Type>::operator() ()
 
   // Transform confusion matrix
   matrix<Type> Psi(n_sp,n_obs_types);
+  Psi.fill(-20.0);
+  for(int ipar=0;ipar<n_misID_par;ipar++){
+    Psi(MisID_pos_rows(ipar),MisID_pos_cols(ipar))=MisID_pars(ipar);
+  }
   Type tmp_sum;
   for(int isp=0;isp<n_sp;isp++){
+    Psi(isp,MisID_zero_cols(isp))=0;
     tmp_sum = 0.0;
     for(int itype=0;itype<n_obs_types;itype++){
-      tmp_sum = tmp_sum+exp(MisID_pars(isp,itype));
+      tmp_sum = tmp_sum+exp(Psi(isp,itype));
     }
     for(int itype=0;itype<n_obs_types;itype++){
-      Psi(isp,itype)=exp(MisID_pars(isp,itype)) / tmp_sum;
+      Psi(isp,itype)=exp(Psi(isp,itype)) / tmp_sum;
     }
   }
   //std::cout<<Psi<<'\n';

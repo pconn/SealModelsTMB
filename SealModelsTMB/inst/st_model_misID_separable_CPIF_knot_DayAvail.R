@@ -80,13 +80,19 @@ Sigma_logit_thin = as(Sigma_logit_thin,"dgTMatrix")
 
 #set up misID matrix using parameters on multinomial-logit scale
 misIDcols = c(1:n_obs_types)
-MisID_pars = matrix(0,n_species,n_obs_types)
-MisID_pars[1,] = c(2.5,1.5,1,-20,-0.5,0,-20,-0.5,0,1)
-MisID_pars[2,] = c(-20,-0.5,0,2.5,1.5,1,-20,-0.5,0,1)
-MisID_pars[3,] = c(-20,-0.5,0,-20,-0.5,0,2.5,1.5,1,1)
-MisID_real = MisID_pars
-for(isp in 1:n_species)MisID_real[isp,] = exp(MisID_pars[isp,])/sum(exp(MisID_pars[isp,]))
-n_misID_par = n_species*n_obs_types
+MisID_pos_rows = c(rep(1,7),rep(2,7),rep(3,7))
+MisID_zero_cols = c(3,6,9)
+n_misID_par=length(MisID_pos_rows)
+MisID_pos_cols = c(1,2,5,6,8,9,10,2,3,4,5,8,9,10,2,3,5,6,7,8,10)
+MisID_pars = c(2.5,1.5,-0.5,0,-0.5,0,1,
+              -0.5,0,2.5,1.5,-0.5,0,1,
+              -0.5,0,-0.5,0,2.5,1.5,1)
+MisID_real = matrix(-20,n_species,n_obs_types)
+for(ipar in 1:n_misID_par)MisID_real[MisID_pos_rows[ipar],MisID_pos_cols[ipar]]=MisID_pars[ipar]
+for(isp in 1:n_species){
+  MisID_real[isp,MisID_zero_cols[isp]]=0
+  MisID_real[isp,] = exp(MisID_real[isp,])/sum(exp(MisID_real[isp,]))
+}
 MisID_Sigma = matrix(0.000001,n_misID_par,n_misID_par)
 diag(MisID_Sigma) = 0.004
 
@@ -217,7 +223,7 @@ isim=1
     X_day = kronecker(diag(n_species),X_day)
     
 
-    Data = list( "Options_vec"=Options_vec, "C_i"=C_i, "P_i"=Prop_sampled,"A_s"=rep(1,n_cells*t_steps),"S_i"=S_i-1,"Y_s"=Y_s,"X_s"=X_s, "spde"=spde,"thin_mu_logit"=thin_logit,"Sigma_logit_thin"=Sigma_logit_thin,"X_day"=X_day,"MisID_mu"=MisID_pars,"MisID_Sigma"=MisID_Sigma,"Kmap"=Kmap)
+    Data = list( "Options_vec"=Options_vec, "C_i"=C_i, "P_i"=Prop_sampled,"A_s"=rep(1,n_cells*t_steps),"S_i"=S_i-1,"Y_s"=Y_s,"X_s"=X_s, "spde"=spde,"thin_mu_logit"=thin_logit,"Sigma_logit_thin"=Sigma_logit_thin,"X_day"=X_day,"MisID_mu"=MisID_pars,"MisID_Sigma"=MisID_Sigma,"MisID_pos_rows"=MisID_pos_rows-1,"MisID_pos_cols"=MisID_pos_cols-1,"MisID_zero_cols"=MisID_zero_cols-1,"Kmap"=Kmap)
 
     # Parameters / Initial values - set close to truth for faster convergence
     Etainput_st = array(0,dim=c(n_species,mesh$n,t_steps))  #spatio-temporal random effects
